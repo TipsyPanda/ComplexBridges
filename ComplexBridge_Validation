@@ -1,0 +1,443 @@
+# -*- coding: utf-8 -*-
+"""IsolationForest_Validation.ipynb
+
+Model Validation for Strain Gauge Isolation Forest
+Splits data chronologically, trains on earlier data, validates on later data
+"""
+
+# %pip install pandas numpy scikit-learn matplotlib seaborn pyarrow fastparquet
+
+import os, json, joblib, numpy as np, pandas as pd
+from typing import Dict, List, Tuple
+import matplotlib.pyplot as plt
+import seaborn as sns
+from datetime import datetime
+
+from sklearn.preprocessing import RobustScaler
+from sklearn.ensemble import IsolationForest
+from sklearn.metrics import (
+    precision_recall_curve, average_precision_score, 
+    precision_recall_fscore_support, roc_auc_score, roc_curve,
+    confusion_matrix, classification_report
+)
+
+from google.colab import drive
+drive.mount('/content/drive/')
+
+# Paths
+DATA_PATH = "/content/drive/MyDrive/ComplexBridge_work/Data/"
+ARTIFACT_DIR = "/content/drive/MyDrive/ComplexBridge_work/Artifacts/"
+VALIDATION_DIR = os.path.join(ARTIFACT_DIR, "validation_results")
+os.makedirs(VALIDATION_DIR, exist_ok=True)
+
+print("DATA_PATH       :", DATA_PATH)
+print("ARTIFACT_DIR    :", ARTIFACT_DIR)
+print("VALIDATION_DIR  :", VALIDATION_DIR)
+
+"""## 1) Configuration"""
+
+# Feature columns for strain gauge
+STRAIN_FEATURES = ["f_mean","f_std","f_rms","f_p2p","f_slope","fft_low","fft_mid","fft_high"]
+
+# Train/test split ratio (chronological split)
+TRAIN_RATIO = 0.7
+
+# Isolation Forest parameters
+ISO_PARAMS = {
+    'n_estimators': 300,
+    'contamination': 'auto',
+    'random_state': 42,
+    'n_jobs': -1
+}
+
+"""## 2) Utility Functions"""
+
+def save_json(path, obj):
+    """Save dictionary to JSON file"""
+    with open(path, "w") as f:
+        json.dump(obj, f, indent=2)
+
+def load_json(path):
+    """Load JSON file"""
+    with open(path, "r") as f:
+        return json.load(f)
+
+def create_span_dir(span_id: str) -> str:
+    """Create and return validation directory for span"""
+    d = os.path.join(VALIDATION_DIR, f"{span_id}_strain_gauge")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+def read_feats(sensor_type: str, use_scaled: bool = True) -> pd.DataFrame:
+    """Read feature files (prefer scaled, prefer parquet)"""
+    bases = []
+    if use_scaled:
+        bases.append(os.path.join(ARTIFACT_DIR, f"features/feats_{sensor_type}_scaled"))
+    bases.append(os.path.join(ARTIFACT_DIR, f"features/feats_{sensor_type}"))
+    
+    for base in bases:
+        for ext in [".parquet", ".csv"]:
+            path = base + ext
+            if os.path.exists(path):
+                if ext == ".parquet":
+                    df = pd.read_parquet(path)
+                else:
+                    df = pd.read_csv(path)
+                
+                # Ensure datetime
+                if 't_center' in df.columns and not np.issubdtype(df['t_center'].dtype, np.datetime64):
+                    df['t_center'] = pd.to_datetime(df['t_center'], errors='coerce')
+                return df
+    
+    return pd.DataFrame()
+
+"""## 3) Load Strain Gauge Features"""
+
+print("Loading strain gauge features...")
+feats_strain = read_feats("strain_gauge", use_scaled=True)
+
+if feats_strain.empty:
+    print("ERROR: No strain gauge features found!")
+else:
+    print(f"Loaded strain features: shape={feats_strain.shape}")
+    print(f"Columns: {list(feats_strain.columns)}")
+    print(f"Date range: {feats_strain['t_center'].min()} to {feats_strain['t_center'].max()}")
+    if 'span_id' in feats_strain.columns:
+        print(f"Spans: {feats_strain['span_id'].unique().tolist()}")
+
+"""## 4) Train/Test Split Function"""
+
+def split_train_test_chronological(df: pd.DataFrame, train_ratio: float = 0.7):
+    """
+    Split dataframe chronologically based on t_center
+    Returns: train_df, test_df, split_date
+    """
+    df_sorted = df.sort_values('t_center').reset_index(drop=True)
+    split_idx = int(len(df_sorted) * train_ratio)
+    
+    train_df = df_sorted.iloc[:split_idx].copy()
+    test_df = df_sorted.iloc[split_idx:].copy()
+    split_date = train_df['t_center'].max()
+    
+    return train_df, test_df, split_date
+
+"""## 5) Model Training & Validation Function"""
+
+def train_and_validate_isoforest(span_id: str, df_span: pd.DataFrame):
+    """
+    Train Isolation Forest on training data and validate on test data
+    """
+    print(f"\n{'='*60}")
+    print(f"Processing Span: {span_id}")
+    print(f"{'='*60}")
+    
+    val_dir = create_span_dir(span_id)
+    
+    # Check if we have all required features
+    missing_feats = [f for f in STRAIN_FEATURES if f not in df_span.columns]
+    if missing_feats:
+        print(f"ERROR: Missing features: {missing_feats}")
+        return None
+    
+    # Split train/test chronologically
+    train_df, test_df, split_date = split_train_test_chronological(df_span, TRAIN_RATIO)
+    
+    print(f"\nData Split:")
+    print(f"  Total samples: {len(df_span)}")
+    print(f"  Train samples: {len(train_df)} ({len(train_df)/len(df_span)*100:.1f}%)")
+    print(f"  Test samples:  {len(test_df)} ({len(test_df)/len(df_span)*100:.1f}%)")
+    print(f"  Split date:    {split_date}")
+    
+    # Prepare feature matrices
+    X_train = train_df[STRAIN_FEATURES].to_numpy()
+    X_test = test_df[STRAIN_FEATURES].to_numpy()
+    
+    # Check for labels if available
+    has_labels = 'label_rule' in df_span.columns
+    if has_labels:
+        y_train = train_df['label_rule'].to_numpy()
+        y_test = test_df['label_rule'].to_numpy()
+        print(f"\nLabels found:")
+        print(f"  Train anomalies: {y_train.sum()} ({y_train.sum()/len(y_train)*100:.2f}%)")
+        print(f"  Test anomalies:  {y_test.sum()} ({y_test.sum()/len(y_test)*100:.2f}%)")
+    
+    # Train Isolation Forest
+    print(f"\nTraining Isolation Forest...")
+    iso_model = IsolationForest(**ISO_PARAMS)
+    iso_model.fit(X_train)
+    
+    # Get anomaly scores (lower = more anomalous)
+    train_scores = iso_model.decision_function(X_train)
+    test_scores = iso_model.decision_function(X_test)
+    
+    print(f"  Train score range: [{train_scores.min():.4f}, {train_scores.max():.4f}]")
+    print(f"  Test score range:  [{test_scores.min():.4f}, {test_scores.max():.4f}]")
+    
+    # Determine threshold (0.5 percentile from training data)
+    threshold = float(np.percentile(train_scores, 0.5))
+    print(f"  Threshold (0.5 percentile): {threshold:.6f}")
+    
+    # Predict anomalies
+    train_pred = (train_scores < threshold).astype(int)
+    test_pred = (test_scores < threshold).astype(int)
+    
+    print(f"\nPredicted anomalies:")
+    print(f"  Train: {train_pred.sum()} ({train_pred.sum()/len(train_pred)*100:.2f}%)")
+    print(f"  Test:  {test_pred.sum()} ({test_pred.sum()/len(test_pred)*100:.2f}%)")
+    
+    # Save model and threshold
+    model_path = os.path.join(val_dir, "isoforest_model.pkl")
+    joblib.dump(iso_model, model_path)
+    
+    threshold_path = os.path.join(val_dir, "threshold.json")
+    save_json(threshold_path, {
+        "score_threshold": threshold,
+        "train_score_mean": float(train_scores.mean()),
+        "train_score_std": float(train_scores.std()),
+        "split_date": str(split_date),
+        "note": "score < threshold => anomaly"
+    })
+    
+    # Evaluation metrics
+    results = {
+        "span_id": span_id,
+        "split_date": str(split_date),
+        "train_samples": int(len(train_df)),
+        "test_samples": int(len(test_df)),
+        "threshold": float(threshold),
+        "train_anomaly_rate": float(train_pred.sum() / len(train_pred)),
+        "test_anomaly_rate": float(test_pred.sum() / len(test_pred)),
+    }
+    
+    # If we have labels, compute classification metrics
+    if has_labels:
+        print(f"\n{'='*60}")
+        print("CLASSIFICATION METRICS (Test Set)")
+        print(f"{'='*60}")
+        
+        # Confusion matrix
+        cm = confusion_matrix(y_test, test_pred)
+        print(f"\nConfusion Matrix:")
+        print(f"                Predicted Normal  Predicted Anomaly")
+        print(f"Actual Normal   {cm[0,0]:15d}  {cm[0,1]:17d}")
+        print(f"Actual Anomaly  {cm[1,0]:15d}  {cm[1,1]:17d}")
+        
+        # Metrics
+        precision, recall, f1, _ = precision_recall_fscore_support(y_test, test_pred, average='binary')
+        
+        print(f"\nPerformance Metrics:")
+        print(f"  Precision: {precision:.4f}")
+        print(f"  Recall:    {recall:.4f}")
+        print(f"  F1-Score:  {f1:.4f}")
+        
+        # ROC-AUC (using negative scores since lower = more anomalous)
+        try:
+            roc_auc = roc_auc_score(y_test, -test_scores)
+            print(f"  ROC-AUC:   {roc_auc:.4f}")
+        except:
+            roc_auc = None
+        
+        # Average Precision
+        try:
+            avg_precision = average_precision_score(y_test, -test_scores)
+            print(f"  Avg Precision: {avg_precision:.4f}")
+        except:
+            avg_precision = None
+        
+        # Add to results
+        results.update({
+            "test_precision": float(precision),
+            "test_recall": float(recall),
+            "test_f1": float(f1),
+            "test_roc_auc": float(roc_auc) if roc_auc else None,
+            "test_avg_precision": float(avg_precision) if avg_precision else None,
+            "confusion_matrix": cm.tolist(),
+            "true_anomalies": int(y_test.sum()),
+            "detected_anomalies": int(test_pred.sum()),
+            "true_positives": int(cm[1,1]),
+            "false_positives": int(cm[0,1]),
+            "true_negatives": int(cm[0,0]),
+            "false_negatives": int(cm[1,0])
+        })
+        
+        # Plot results
+        plot_validation_results(
+            span_id, val_dir, 
+            train_scores, test_scores, y_test, 
+            threshold, train_df, test_df
+        )
+    
+    # Save results
+    results_path = os.path.join(val_dir, "validation_results.json")
+    save_json(results_path, results)
+    
+    # Save predictions
+    test_results_df = test_df.copy()
+    test_results_df['anomaly_score'] = test_scores
+    test_results_df['predicted_anomaly'] = test_pred
+    if has_labels:
+        test_results_df['true_label'] = y_test
+    
+    pred_path = os.path.join(val_dir, "test_predictions.csv")
+    test_results_df.to_csv(pred_path, index=False)
+    
+    print(f"\nResults saved to: {val_dir}")
+    
+    return results
+
+"""## 6) Visualization Functions"""
+
+def plot_validation_results(span_id, save_dir, train_scores, test_scores, y_test, 
+                            threshold, train_df, test_df):
+    """Create comprehensive validation plots"""
+    
+    fig = plt.figure(figsize=(16, 12))
+    
+    # 1. Score distributions
+    ax1 = plt.subplot(3, 2, 1)
+    plt.hist(train_scores, bins=50, alpha=0.6, label='Train', density=True)
+    plt.hist(test_scores, bins=50, alpha=0.6, label='Test', density=True)
+    plt.axvline(threshold, color='r', linestyle='--', label=f'Threshold={threshold:.4f}')
+    plt.xlabel('Anomaly Score')
+    plt.ylabel('Density')
+    plt.title('Score Distribution (Train vs Test)')
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    
+    # 2. Score distribution by true label
+    ax2 = plt.subplot(3, 2, 2)
+    normal_scores = test_scores[y_test == 0]
+    anomaly_scores = test_scores[y_test == 1]
+    plt.hist(normal_scores, bins=30, alpha=0.6, label=f'Normal (n={len(normal_scores)})', density=True)
+    plt.hist(anomaly_scores, bins=30, alpha=0.6, label=f'Anomaly (n={len(anomaly_scores)})', density=True)
+    plt.axvline(threshold, color='r', linestyle='--', label='Threshold')
+    plt.xlabel('Anomaly Score')
+    plt.ylabel('Density')
+    plt.title('Test Set: Scores by True Label')
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    
+    # 3. Time series of scores
+    ax3 = plt.subplot(3, 2, 3)
+    plt.scatter(test_df['t_center'], test_scores, c=y_test, cmap='coolwarm', 
+               alpha=0.6, s=10, label='Test samples')
+    plt.axhline(threshold, color='r', linestyle='--', label='Threshold')
+    plt.xlabel('Time')
+    plt.ylabel('Anomaly Score')
+    plt.title('Anomaly Scores Over Time (Test Set)')
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    plt.xticks(rotation=45)
+    
+    # 4. ROC Curve
+    ax4 = plt.subplot(3, 2, 4)
+    try:
+        fpr, tpr, _ = roc_curve(y_test, -test_scores)
+        roc_auc = roc_auc_score(y_test, -test_scores)
+        plt.plot(fpr, tpr, label=f'ROC (AUC={roc_auc:.3f})')
+        plt.plot([0, 1], [0, 1], 'k--', label='Random')
+        plt.xlabel('False Positive Rate')
+        plt.ylabel('True Positive Rate')
+        plt.title('ROC Curve')
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+    except Exception as e:
+        plt.text(0.5, 0.5, f'ROC plot failed:\n{str(e)}', ha='center', va='center')
+    
+    # 5. Precision-Recall Curve
+    ax5 = plt.subplot(3, 2, 5)
+    try:
+        precision, recall, _ = precision_recall_curve(y_test, -test_scores)
+        avg_precision = average_precision_score(y_test, -test_scores)
+        plt.plot(recall, precision, label=f'PR (AP={avg_precision:.3f})')
+        plt.xlabel('Recall')
+        plt.ylabel('Precision')
+        plt.title('Precision-Recall Curve')
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+    except Exception as e:
+        plt.text(0.5, 0.5, f'PR plot failed:\n{str(e)}', ha='center', va='center')
+    
+    # 6. Confusion Matrix
+    ax6 = plt.subplot(3, 2, 6)
+    test_pred = (test_scores < threshold).astype(int)
+    cm = confusion_matrix(y_test, test_pred)
+    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', 
+                xticklabels=['Normal', 'Anomaly'],
+                yticklabels=['Normal', 'Anomaly'])
+    plt.ylabel('True Label')
+    plt.xlabel('Predicted Label')
+    plt.title('Confusion Matrix (Test Set)')
+    
+    plt.suptitle(f'Validation Results: {span_id}', fontsize=16, y=0.995)
+    plt.tight_layout()
+    
+    plot_path = os.path.join(save_dir, 'validation_plots.png')
+    plt.savefig(plot_path, dpi=150, bbox_inches='tight')
+    plt.close()
+    
+    print(f"Plots saved to: {plot_path}")
+
+"""## 7) Run Validation for All Spans"""
+
+if not feats_strain.empty and 'span_id' in feats_strain.columns:
+    spans = feats_strain['span_id'].dropna().unique().tolist()
+    print(f"\nFound {len(spans)} span(s): {spans}")
+    
+    all_results = []
+    
+    for span_id in spans:
+        try:
+            # Filter data for this span
+            df_span = feats_strain[
+                (feats_strain['span_id'] == span_id) & 
+                (feats_strain['sensor_type'] == 'strain_gauge')
+            ].copy()
+            
+            if df_span.empty:
+                print(f"\n[{span_id}] No strain gauge data found - skipping")
+                continue
+            
+            if len(df_span) < 100:
+                print(f"\n[{span_id}] Insufficient data ({len(df_span)} samples) - skipping")
+                continue
+            
+            # Train and validate
+            result = train_and_validate_isoforest(span_id, df_span)
+            
+            if result:
+                all_results.append(result)
+        
+        except Exception as e:
+            print(f"\n[{span_id}] ERROR: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    # Save summary
+    if all_results:
+        summary_path = os.path.join(VALIDATION_DIR, "validation_summary.json")
+        save_json(summary_path, {
+            "validation_date": datetime.now().isoformat(),
+            "n_spans": len(all_results),
+            "results": all_results
+        })
+        
+        print(f"\n{'='*60}")
+        print("VALIDATION SUMMARY")
+        print(f"{'='*60}")
+        print(f"Successfully validated {len(all_results)} span(s)")
+        print(f"Summary saved to: {summary_path}")
+        
+        # Print summary table
+        if all_results and 'test_precision' in all_results[0]:
+            print(f"\n{'Span ID':<15} {'Precision':<12} {'Recall':<12} {'F1-Score':<12} {'ROC-AUC':<12}")
+            print("-" * 63)
+            for r in all_results:
+                print(f"{r['span_id']:<15} {r['test_precision']:<12.4f} {r['test_recall']:<12.4f} "
+                      f"{r['test_f1']:<12.4f} {r.get('test_roc_auc', 'N/A'):<12}")
+else:
+    print("ERROR: No span data available for validation")
+
+print("\n" + "="*60)
+print("Validation Complete!")
+print("="*60)
