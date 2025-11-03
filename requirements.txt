@@ -1,8 +1,20 @@
+# Web Dashboard
 streamlit>=1.37
+plotly>=5.22
+
+# Data Processing
 pandas>=2.2
 numpy>=1.26
-scikit-learn>=1.5
-plotly>=5.22
 pyarrow>=17
-joblib>=1.4
 python-dateutil>=2.9
+
+# Machine Learning & Deep Learning
+scikit-learn>=1.5
+joblib>=1.4
+tensorflow>=2.14
+h5py>=3.9
+
+# Development Tools
+black>=23.9
+pylint>=3.0
+pytest>=7.4
