@@ -7,4 +7,4 @@ Local, Python-first anomaly dashboard for sensor time series.
 ```bash
 python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
-streamlit run .\src\Bridge_Dashboard.py
+streamlit run app.py
