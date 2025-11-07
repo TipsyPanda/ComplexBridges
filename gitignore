@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+.env
+.conda
+
+# Streamlit
+.streamlit/
+
+# Data & artifacts
+artifacts/
+*.pkl
+*.joblib
+*.parquet
+
+# VS Code
+.vscode/
+
+# System
+.DS_Store
