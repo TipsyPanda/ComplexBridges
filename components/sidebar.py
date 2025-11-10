@@ -4,7 +4,7 @@ Renders all sidebar controls and returns configuration
 """
 
 import streamlit as st
-from config import PLAYBACK_CONFIG, DEFAULT_THRESHOLDS
+from config import PLAYBACK_CONFIG, DEFAULT_THRESHOLDS, ML_CONFIG
 
 
 def render_sidebar(data):
@@ -106,6 +106,27 @@ def render_sidebar(data):
                     value=default_value,
                     step=0.01 if sensor_type == 'accelerometer_rms' else 1.0
                 )
+                
+
+        if ML_CONFIG['enable_ml_scoring']:
+            st.markdown("---")
+            st.subheader("🤖 ML Model Settings")
+            
+            ml_window = st.slider(
+                "ML Feature Window",
+                min_value=20,
+                max_value=200,
+                value=ML_CONFIG['feature_window_size'],
+                step=10,
+                help="Number of recent records for ML feature computation"
+            )
+            
+            show_ml_features = st.checkbox(
+                "Show Feature Details",
+                value=False,
+                help="Display computed features in risk cards"
+            )
+                    
     
     return {
         'speed': speed,
@@ -114,5 +135,7 @@ def render_sidebar(data):
         'selected_sensors': selected_sensors,
         'selected_spans': selected_spans,
         'use_custom_thresholds': use_custom_thresholds,
-        'custom_thresholds': custom_thresholds
+        'custom_thresholds': custom_thresholds,
+        'ml_window': ml_window,
+        'show_ml_features': show_ml_features
     }

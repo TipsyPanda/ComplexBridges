@@ -63,6 +63,25 @@ STATUS_THRESHOLDS = {
     'alert_multiplier': 1.0     # 100% of threshold = alert
 }
 
+# ML Model paths
+ML_CONFIG = {
+    'artifact_dir': 'artifacts/',  
+    'enable_ml_scoring': True,         # Toggle ML-based anomaly detection
+    'feature_window_size': 50,         # Window size for feature computation
+    'score_update_frequency': 10,      # Update scores every N records
+}
+
+# Risk level thresholds and colors
+RISK_LEVELS = {
+    'critical': {'color': '#dc3545', 'emoji': '🔴', 'priority': 4},
+    'high':     {'color': '#fd7e14', 'emoji': '🟠', 'priority': 3},
+    'medium':   {'color': '#ffc107', 'emoji': '🟡', 'priority': 2},
+    'low':      {'color': '#28a745', 'emoji': '🟢', 'priority': 1},
+    'normal':   {'color': '#28a745', 'emoji': '🟢', 'priority': 0},
+    'unknown':  {'color': '#6c757d', 'emoji': '⚪', 'priority': -1},
+    'error':    {'color': '#6c757d', 'emoji': '⚫', 'priority': -2}
+}
+
 # Custom CSS
 CUSTOM_CSS = """
 <style>
