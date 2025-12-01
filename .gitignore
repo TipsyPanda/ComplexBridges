@@ -8,7 +8,10 @@ __pycache__/
 # Streamlit
 .streamlit/
 
-
+# Data & artifacts
+# artifacts/ - now tracked in git
+# *.pkl - allowing scalers to be tracked
+*.joblib
 *.parquet
 
 # VS Code

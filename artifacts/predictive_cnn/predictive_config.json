@@ -1,0 +1,23 @@
+{
+  "window_size": 50,
+  "prediction_horizon": 50,
+  "prediction_horizon_minutes": 5.0,
+  "stride": 10,
+  "n_sensors": 5,
+  "sensor_columns": [
+    "accelerometer_rms_ACC_101",
+    "accelerometer_rms_ACC_102",
+    "strain_gauge_SG_001",
+    "strain_gauge_SG_002",
+    "temperature_TMP_201"
+  ],
+  "training_date": "2025-12-01 09:27:49",
+  "model_input_shape": [
+    50,
+    5
+  ],
+  "total_parameters": 167937,
+  "training_samples": 1253,
+  "validation_samples": 268,
+  "test_samples": 269
+}
