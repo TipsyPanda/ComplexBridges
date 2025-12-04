@@ -1,0 +1,4 @@
+{
+  "recon_err_threshold": 1.1908146142959595,
+  "note": "err>thr => alert (on feature sequences)"
+}

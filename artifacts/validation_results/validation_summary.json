@@ -1,0 +1,36 @@
+{
+  "validation_date": "2025-11-03T17:58:01.919531",
+  "n_spans": 1,
+  "results": [
+    {
+      "span_id": "SPAN_1",
+      "split_date": "2025-10-10 12:20:56.500000",
+      "train_samples": 419,
+      "test_samples": 180,
+      "threshold": -0.1331490072836802,
+      "train_anomaly_rate": 0.007159904534606206,
+      "test_anomaly_rate": 0.03333333333333333,
+      "test_precision": 1.0,
+      "test_recall": 0.125,
+      "test_f1": 0.2222222222222222,
+      "test_roc_auc": 0.9876893939393939,
+      "test_avg_precision": 0.9529598839382276,
+      "confusion_matrix": [
+        [
+          132,
+          0
+        ],
+        [
+          42,
+          6
+        ]
+      ],
+      "true_anomalies": 48,
+      "detected_anomalies": 6,
+      "true_positives": 6,
+      "false_positives": 0,
+      "true_negatives": 132,
+      "false_negatives": 42
+    }
+  ]
+}

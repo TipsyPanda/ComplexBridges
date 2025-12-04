@@ -1,0 +1,7 @@
+{
+  "score_threshold": -0.1331490072836802,
+  "train_score_mean": 0.04259429762595192,
+  "train_score_std": 0.059758000480031825,
+  "split_date": "2025-10-10 12:20:56.500000",
+  "note": "score < threshold => anomaly"
+}
