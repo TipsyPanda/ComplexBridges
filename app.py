@@ -17,6 +17,8 @@ from components.tabs.anomaly_analysis import render_anomaly_analysis
 from components.tabs.data_table import render_data_table
 from src.ml_scoring import MLScorer
 from components.ml_display import render_ml_risk_panel
+from src.cnn_scoring import CNNScorer
+from components.cnn_display import render_cnn_panel
 import time
 
 
@@ -34,7 +36,7 @@ data = load_data()
 if data is None:
     st.stop()
 
-# Initialize ML scorer 
+# Initialize ML scorer
 if ML_CONFIG['enable_ml_scoring']:
     try:
         ml_scorer = MLScorer(ML_CONFIG['artifact_dir'])
@@ -43,6 +45,13 @@ if ML_CONFIG['enable_ml_scoring']:
         ml_scorer = None
 else:
     ml_scorer = None
+
+# Initialize CNN scorer
+try:
+    cnn_scorer = CNNScorer(artifacts_dir='artifacts')
+except Exception as e:
+    st.warning(f"CNN models not available: {e}")
+    cnn_scorer = None
 
 # Render header
 render_header()
@@ -69,9 +78,14 @@ st.markdown("---")
 # Render alerts
 render_alerts(current_window)
 
-# Add ML Risk Panel 
+# Add ML Risk Panel
 if ml_scorer:
     render_ml_risk_panel(ml_scorer, current_window, controls['window_size'])
+    st.markdown("---")
+
+# Add CNN Panel
+if cnn_scorer:
+    render_cnn_panel(cnn_scorer, current_window)
     st.markdown("---")
 
 # Create tabs
