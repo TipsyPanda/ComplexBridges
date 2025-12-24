@@ -4,6 +4,8 @@ Main application entry point
 """
 
 import streamlit as st
+import time
+from datetime import timedelta
 from config import PAGE_CONFIG, CUSTOM_CSS, ML_CONFIG
 from src.data_loader import load_data
 from src.utils import initialize_session_state
@@ -19,7 +21,6 @@ from src.ml_scoring import MLScorer
 from components.ml_display import render_ml_risk_panel
 from src.cnn_scoring import CNNScorer
 from components.cnn_display import render_cnn_panel
-import time
 
 
 # Page configuration
@@ -61,65 +62,72 @@ controls = render_sidebar(data)
 
 # Filter data based on sidebar selections
 filtered_data = data[
-    (data['sensor_id'].isin(controls['selected_sensors'])) & 
+    (data['sensor_id'].isin(controls['selected_sensors'])) &
     (data['span_id'].isin(controls['selected_spans']))
 ]
 
-# Get current window
-start_idx = max(0, st.session_state.current_index - controls['window_size'])
-end_idx = st.session_state.current_index + 1
-current_window = filtered_data.iloc[start_idx:end_idx]
 
-# Render metrics
-render_metrics(current_window, filtered_data, controls['window_size'])
+@st.fragment(run_every=timedelta(milliseconds=100))
+def render_dynamic_content():
+    """Fragment that reruns independently without refreshing static elements"""
 
-st.markdown("---")
+    # Auto-advance logic (at top so index updates before rendering)
+    if st.session_state.is_playing:
+        if st.session_state.current_index < len(filtered_data) - 1:
+            st.session_state.current_index = min(
+                st.session_state.current_index + st.session_state.speed,
+                len(filtered_data) - 1
+            )
+        else:
+            st.session_state.is_playing = False
+            st.success("Reached end of data!")
 
-# Render alerts
-render_alerts(current_window)
+    # Get current window
+    start_idx = max(0, st.session_state.current_index - controls['window_size'])
+    end_idx = st.session_state.current_index + 1
+    current_window = filtered_data.iloc[start_idx:end_idx]
 
-# Add ML Risk Panel
-if ml_scorer:
-    render_ml_risk_panel(ml_scorer, current_window, controls['window_size'])
+    # Render metrics
+    render_metrics(current_window, filtered_data, controls['window_size'])
+
     st.markdown("---")
 
-# Add CNN Panel
-if cnn_scorer:
-    render_cnn_panel(cnn_scorer, current_window)
-    st.markdown("---")
+    # Render alerts
+    render_alerts(current_window)
 
-# Create tabs
-tab1, tab2, tab3, tab4 = st.tabs([
-    "📊 Real-Time Plots", 
-    "📈 Sensor Dashboard", 
-    "🔔 Anomaly Analysis", 
-    "📋 Data Table"
-])
+    # Add ML Risk Panel
+    if ml_scorer:
+        render_ml_risk_panel(ml_scorer, current_window, controls['window_size'])
+        st.markdown("---")
 
-with tab1:
-    render_realtime_plots(current_window, controls)
+    # Add CNN Panel
+    if cnn_scorer:
+        render_cnn_panel(cnn_scorer, current_window)
+        st.markdown("---")
 
-with tab2:
-    render_dashboard(current_window, controls)
+    # Create tabs
+    tab1, tab2, tab3, tab4 = st.tabs([
+        "📊 Real-Time Plots",
+        "📈 Sensor Dashboard",
+        "🔔 Anomaly Analysis",
+        "📋 Data Table"
+    ])
 
-with tab3:
-    render_anomaly_analysis(current_window)
+    with tab1:
+        render_realtime_plots(current_window, controls)
 
-with tab4:
-    render_data_table(current_window)
+    with tab2:
+        render_dashboard(current_window, controls)
 
-# Auto-advance logic
-if st.session_state.is_playing:
-    if st.session_state.current_index < len(filtered_data) - 1:
-        st.session_state.current_index = min(
-            st.session_state.current_index + st.session_state.speed,
-            len(filtered_data) - 1
-        )
-        time.sleep(controls['update_interval'] / 1000.0)
-        st.rerun()
-    else:
-        st.session_state.is_playing = False
-        st.success("✅ Reached end of data!")
+    with tab3:
+        render_anomaly_analysis(current_window)
+
+    with tab4:
+        render_data_table(current_window)
+
+
+# Render the dynamic content fragment
+render_dynamic_content()
 
 # Footer
 st.markdown("---")

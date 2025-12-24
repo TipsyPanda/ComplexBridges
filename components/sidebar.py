@@ -32,12 +32,10 @@ def render_sidebar(data):
             if st.button("⏮️ Reset", key="reset"):
                 st.session_state.current_index = 0
                 st.session_state.is_playing = False
-                st.rerun()
-        
+
         with col3:
             if st.button("⏭️ Skip", key="skip"):
                 st.session_state.current_index = min(st.session_state.current_index + 500, len(data) - 1)
-                st.rerun()
         
         # Speed control
         speed = st.slider(
