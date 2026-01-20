@@ -16,3 +16,7 @@ __pycache__/
 
 # VS Code
 .vscode/
+docs/section_4_2_unsupervised_baseline.md
+docs/section_4_3_Predictive_CNN_Anomaly_Forecasting.md
+docs/section_4_4_z24.md
+docs/section_4_5_hell.md
