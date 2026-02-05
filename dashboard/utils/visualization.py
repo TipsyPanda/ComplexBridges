@@ -84,6 +84,7 @@ def sensor_timeseries(
         height=height,
         showlegend=False,
         uirevision=sensor_id,
+        transition={"duration": 80},
         **_DARK_LAYOUT,
     )
 

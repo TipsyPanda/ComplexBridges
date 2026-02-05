@@ -258,15 +258,29 @@ def compute_health_score(data: pd.DataFrame) -> tuple:
 
 
 # ================================================================
-# Fragment: only this section reruns during playback — the sidebar,
-# title and CSS stay stable so there is no full-page flicker.
+# Playback helper — compute the current data window from session
+# state so each fragment can independently read the same slice.
 # ================================================================
 _refresh = timedelta(milliseconds=int(PLAYBACK_REFRESH_SEC * 1000))
 
 
+def _playback_window():
+    """Return (playback_df, in_playback) based on current session state."""
+    in_playback = st.session_state.is_playing or st.session_state.current_index > 0
+    if in_playback:
+        window_start = max(0, st.session_state.current_index - display_window)
+        window_end = st.session_state.current_index + 1
+        return filtered_df.iloc[window_start:window_end], True
+    return filtered_df, False
+
+
+# ================================================================
+# Fragment 1 — Header metrics + progress bar.
+# Only these few elements re-render every tick during playback.
+# ================================================================
 @st.fragment(run_every=_refresh if st.session_state.is_playing else None)
-def render_dashboard():
-    # ---- Advance playback ----
+def _live_header():
+    # Advance playback index
     if st.session_state.is_playing:
         st.session_state.current_index = min(
             st.session_state.current_index + playback_speed,
@@ -276,12 +290,7 @@ def render_dashboard():
             st.session_state.is_playing = False
             st.toast("Reached end of data!")
 
-    in_playback = st.session_state.is_playing or st.session_state.current_index > 0
-    window_start = max(0, st.session_state.current_index - display_window)
-    window_end = st.session_state.current_index + 1
-    playback_df = filtered_df.iloc[window_start:window_end] if in_playback else filtered_df
-
-    # ---- Health score ----
+    playback_df, in_playback = _playback_window()
     health_source = playback_df if in_playback else filtered_df
     health, status, color = compute_health_score(health_source)
     anomaly_pct = (
@@ -292,7 +301,10 @@ def render_dashboard():
 
     h1, h2, h3, h4 = st.columns(4)
     h1.metric("Bridge Health", f"{health:.0f} / 100")
-    h2.markdown(f"### <span style='color:{color}'>{status}</span>", unsafe_allow_html=True)
+    h2.markdown(
+        f"### <span style='color:{color}'>{status}</span>",
+        unsafe_allow_html=True,
+    )
     h3.metric("Total Records", f"{len(health_source):,}")
     h4.metric("Anomaly Rate", f"{anomaly_pct:.1f}%")
 
@@ -305,16 +317,24 @@ def render_dashboard():
             text=f"Record {st.session_state.current_index:,} / {len(filtered_df):,}",
         )
 
-    # ---- Tabs ----
-    tab1, tab2, tab3, tab4 = st.tabs([
-        "Live Monitoring",
-        "Alerts",
-        "Historical Analysis",
-        "Correlation",
-    ])
 
-    # ==================== TAB 1: LIVE MONITORING ====================
-    with tab1:
+_live_header()
+
+# ---- Tabs (outside any auto-rerunning fragment) ----
+tab1, tab2, tab3, tab4 = st.tabs([
+    "Live Monitoring",
+    "Alerts",
+    "Historical Analysis",
+    "Correlation",
+])
+
+# ==================== TAB 1: LIVE MONITORING ====================
+# Wrapped in its own fragment so only the chart grid re-renders
+# during playback — the tab bar and other tabs stay untouched.
+# ================================================================
+with tab1:
+    @st.fragment(run_every=_refresh if st.session_state.is_playing else None)
+    def _live_charts():
         st.subheader("Live Sensor Monitoring")
 
         sensor_list = sorted(filtered_df["sensor_id"].unique())
@@ -325,6 +345,7 @@ def render_dashboard():
             key="live_sensor_select",
         )
 
+        playback_df, in_playback = _playback_window()
         plot_source = playback_df if in_playback else filtered_df
         plot_df = plot_source[plot_source["sensor_id"].isin(selected_sensors)]
 
@@ -341,275 +362,283 @@ def render_dashboard():
                     )
                     st.plotly_chart(fig, key=f"live_{sid}", width='stretch')
 
-    # ==================== TAB 2: ALERTS ====================
-    with tab2:
-        st.subheader("Alerts")
-        alerts_df = filtered_df.copy()
-        total_points = len(alerts_df)
+    _live_charts()
 
-        if "anomaly" in alerts_df.columns and total_points > 0:
-            anomaly_points = int((alerts_df["anomaly"] == 1).sum())
-            normal_points = total_points - anomaly_points
+# ==================== TAB 2: ALERTS ====================
+# Static — only re-renders on full page rerun (sidebar changes).
+with tab2:
+    st.subheader("Alerts")
+    alerts_df = filtered_df.copy()
+    total_points = len(alerts_df)
 
-            met1, met2, met3 = st.columns(3)
-            met1.metric("Total Data Points", f"{total_points:,}")
-            met2.metric("Normal Points", f"{normal_points:,}")
-            met3.metric("Anomaly Points", f"{anomaly_points:,}")
+    if "anomaly" in alerts_df.columns and total_points > 0:
+        anomaly_points = int((alerts_df["anomaly"] == 1).sum())
+        normal_points = total_points - anomaly_points
 
-            st.markdown("---")
+        met1, met2, met3 = st.columns(3)
+        met1.metric("Total Data Points", f"{total_points:,}")
+        met2.metric("Normal Points", f"{normal_points:,}")
+        met3.metric("Anomaly Points", f"{anomaly_points:,}")
 
-            critical_count = 0
-            warning_count = 0
+        st.markdown("---")
 
-            if "rule_threshold" in alerts_df.columns and alerts_df["rule_threshold"].notna().any():
-                valid = alerts_df["rule_threshold"] > 0
-                sev_df = alerts_df[valid].copy()
-                if not sev_df.empty:
-                    exceed = (
-                        (sev_df["value"] - sev_df["rule_threshold"]) / sev_df["rule_threshold"]
-                    )
-                    above = sev_df["value"] > sev_df["rule_threshold"]
-                    critical_count = int((above & (exceed > 0.5)).sum())
-                    warning_count = int((above & (exceed <= 0.5)).sum())
+        critical_count = 0
+        warning_count = 0
 
-            st.subheader("Alert Severity")
-            sev1, sev2 = st.columns(2)
-            sev1.metric("Critical Alerts", critical_count)
-            sev2.metric("Warning Alerts", warning_count)
+        if "rule_threshold" in alerts_df.columns and alerts_df["rule_threshold"].notna().any():
+            valid = alerts_df["rule_threshold"] > 0
+            sev_df = alerts_df[valid].copy()
+            if not sev_df.empty:
+                exceed = (
+                    (sev_df["value"] - sev_df["rule_threshold"]) / sev_df["rule_threshold"]
+                )
+                above = sev_df["value"] > sev_df["rule_threshold"]
+                critical_count = int((above & (exceed > 0.5)).sum())
+                warning_count = int((above & (exceed <= 0.5)).sum())
 
-            st.markdown("---")
+        st.subheader("Alert Severity")
+        sev1, sev2 = st.columns(2)
+        sev1.metric("Critical Alerts", critical_count)
+        sev2.metric("Warning Alerts", warning_count)
 
-            if anomaly_points > 0:
-                st.subheader("Recent Anomalies")
+        st.markdown("---")
 
-                fcol1, fcol2 = st.columns(2)
-                with fcol1:
-                    severity_filter = st.multiselect(
-                        "Filter by Severity",
-                        options=["critical", "warning"],
-                        default=["critical", "warning"],
-                        key="alert_severity_filter",
-                    )
-                with fcol2:
-                    alert_sensor_filter = st.multiselect(
-                        "Filter by Sensor",
-                        options=sorted(filtered_df["sensor_id"].unique()),
-                        default=sorted(filtered_df["sensor_id"].unique()),
-                        key="alert_sensor_filter",
-                    )
+        if anomaly_points > 0:
+            st.subheader("Recent Anomalies")
 
-                recent = filtered_df[filtered_df["anomaly"] == 1].copy()
+            fcol1, fcol2 = st.columns(2)
+            with fcol1:
+                severity_filter = st.multiselect(
+                    "Filter by Severity",
+                    options=["critical", "warning"],
+                    default=["critical", "warning"],
+                    key="alert_severity_filter",
+                )
+            with fcol2:
+                alert_sensor_filter = st.multiselect(
+                    "Filter by Sensor",
+                    options=sorted(filtered_df["sensor_id"].unique()),
+                    default=sorted(filtered_df["sensor_id"].unique()),
+                    key="alert_sensor_filter",
+                )
 
-                if "rule_threshold" in recent.columns:
-                    ratio = (recent["value"] - recent["rule_threshold"]) / recent[
-                        "rule_threshold"
-                    ].replace(0, np.nan)
-                    recent["severity"] = "warning"
-                    recent.loc[ratio > 0.5, "severity"] = "critical"
-                else:
-                    recent["severity"] = "warning"
+            recent = filtered_df[filtered_df["anomaly"] == 1].copy()
 
-                recent = recent[
-                    recent["severity"].isin(severity_filter)
-                    & recent["sensor_id"].isin(alert_sensor_filter)
-                ]
-                recent = recent.sort_values("timestamp").tail(RECENT_ANOMALIES_LIMIT)
-
-                show_cols = [
-                    c
-                    for c in [
-                        "timestamp", "sensor_id", "span_id", "value", "unit",
-                        "rule_threshold", "anomaly_type", "severity",
-                    ]
-                    if c in recent.columns
-                ]
-
-                if not recent.empty:
-                    st.dataframe(recent[show_cols], key="alerts_table", width='stretch')
-                else:
-                    st.info("No anomalies match the current filters.")
+            if "rule_threshold" in recent.columns:
+                ratio = (recent["value"] - recent["rule_threshold"]) / recent[
+                    "rule_threshold"
+                ].replace(0, np.nan)
+                recent["severity"] = "warning"
+                recent.loc[ratio > 0.5, "severity"] = "critical"
             else:
-                st.success("No anomalies detected in the selected time range.")
+                recent["severity"] = "warning"
+
+            recent = recent[
+                recent["severity"].isin(severity_filter)
+                & recent["sensor_id"].isin(alert_sensor_filter)
+            ]
+            recent = recent.sort_values("timestamp").tail(RECENT_ANOMALIES_LIMIT)
+
+            show_cols = [
+                c
+                for c in [
+                    "timestamp", "sensor_id", "span_id", "value", "unit",
+                    "rule_threshold", "anomaly_type", "severity",
+                ]
+                if c in recent.columns
+            ]
+
+            if not recent.empty:
+                st.dataframe(recent[show_cols], key="alerts_table", width='stretch')
+            else:
+                st.info("No anomalies match the current filters.")
         else:
-            st.warning("No anomaly information available in the dataset.")
+            st.success("No anomalies detected in the selected time range.")
+    else:
+        st.warning("No anomaly information available in the dataset.")
 
-    # ==================== TAB 3: HISTORICAL ANALYSIS ====================
-    with tab3:
-        st.subheader("Historical Analysis")
+# ==================== TAB 3: HISTORICAL ANALYSIS ====================
+# Static — only re-renders on full page rerun (sidebar changes).
+with tab3:
+    st.subheader("Historical Analysis")
 
-        sensor_ids = sorted(filtered_df["sensor_id"].unique())
-        selected_sensor = st.selectbox("Select sensor", sensor_ids, key="hist_sensor_select")
+    sensor_ids = sorted(filtered_df["sensor_id"].unique())
+    selected_sensor = st.selectbox("Select sensor", sensor_ids, key="hist_sensor_select")
 
-        show_anomalies_only = st.checkbox("Show anomalies only", value=False, key="show_anomalies_only")
+    show_anomalies_only = st.checkbox(
+        "Show anomalies only", value=False, key="show_anomalies_only"
+    )
 
-        s_df = filtered_df[filtered_df["sensor_id"] == selected_sensor].sort_values("timestamp")
+    s_df = filtered_df[filtered_df["sensor_id"] == selected_sensor].sort_values("timestamp")
 
-        if show_anomalies_only and "anomaly" in s_df.columns:
-            s_df = s_df[s_df["anomaly"] == 1]
+    if show_anomalies_only and "anomaly" in s_df.columns:
+        s_df = s_df[s_df["anomaly"] == 1]
 
-        if s_df.empty:
-            st.warning("No data available for this selection.")
-        else:
-            unit = get_unit(s_df)
-            threshold = get_threshold(s_df)
+    if s_df.empty:
+        st.warning("No data available for this selection.")
+    else:
+        unit = get_unit(s_df)
+        threshold = get_threshold(s_df)
 
-            fig = sensor_timeseries(
-                s_df,
-                selected_sensor,
-                unit=unit,
-                threshold=threshold,
-                height=450,
-                title=f"Sensor {selected_sensor} — Historical Trend",
+        fig = sensor_timeseries(
+            s_df,
+            selected_sensor,
+            unit=unit,
+            threshold=threshold,
+            height=450,
+            title=f"Sensor {selected_sensor} — Historical Trend",
+        )
+        st.plotly_chart(fig, key=f"hist_trend_{selected_sensor}", width='stretch')
+
+        st.subheader("Value Distribution")
+        hist = go.Figure()
+        hist.add_trace(
+            go.Histogram(
+                x=s_df["value"],
+                nbinsx=HISTOGRAM_BINS,
+                marker_color=CHART_COLORS["primary"],
             )
-            st.plotly_chart(fig, key=f"hist_trend_{selected_sensor}", width='stretch')
+        )
+        hist.update_layout(
+            xaxis_title=f"Value ({unit})" if unit else "Value",
+            yaxis_title="Count",
+            height=350,
+            showlegend=False,
+            template="plotly_dark",
+            paper_bgcolor=CLR_DARK_BLUE,
+            plot_bgcolor="#081040",
+            font=dict(family="Montserrat", color=CLR_TEXT),
+            xaxis=dict(gridcolor="#1A3080"),
+            yaxis=dict(gridcolor="#1A3080"),
+            uirevision=f"hist_{selected_sensor}",
+        )
+        st.plotly_chart(hist, key=f"hist_dist_{selected_sensor}", width='stretch')
 
-            st.subheader("Value Distribution")
-            hist = go.Figure()
-            hist.add_trace(
-                go.Histogram(
-                    x=s_df["value"],
-                    nbinsx=HISTOGRAM_BINS,
-                    marker_color=CHART_COLORS["primary"],
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Mean", f"{s_df['value'].mean():.2f}")
+        c2.metric("Std", f"{s_df['value'].std():.2f}")
+        c3.metric("Min", f"{s_df['value'].min():.2f}")
+        c4.metric("Max", f"{s_df['value'].max():.2f}")
+
+        # ---- Traffic Load Analysis ----
+        if "traffic_load_proxy" in s_df.columns and s_df["traffic_load_proxy"].notna().any():
+            st.markdown("---")
+            st.subheader("Traffic Load Analysis")
+
+            correlation = s_df[["value", "traffic_load_proxy"]].corr().iloc[0, 1]
+
+            tcol1, tcol2 = st.columns(2)
+
+            with tcol1:
+                fig_traffic = go.Figure()
+                fig_traffic.add_trace(
+                    go.Scatter(
+                        x=s_df["timestamp"],
+                        y=s_df["traffic_load_proxy"],
+                        mode="lines",
+                        name="Traffic Load",
+                        line=dict(color=CHART_COLORS["traffic"], width=2),
+                    )
                 )
-            )
-            hist.update_layout(
-                xaxis_title=f"Value ({unit})" if unit else "Value",
-                yaxis_title="Count",
-                height=350,
-                showlegend=False,
-                template="plotly_dark",
-                paper_bgcolor=CLR_DARK_BLUE,
-                plot_bgcolor="#081040",
-                font=dict(family="Montserrat", color=CLR_TEXT),
-                xaxis=dict(gridcolor="#1A3080"),
-                yaxis=dict(gridcolor="#1A3080"),
-                uirevision=f"hist_{selected_sensor}",
-            )
-            st.plotly_chart(hist, key=f"hist_dist_{selected_sensor}", width='stretch')
-
-            c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Mean", f"{s_df['value'].mean():.2f}")
-            c2.metric("Std", f"{s_df['value'].std():.2f}")
-            c3.metric("Min", f"{s_df['value'].min():.2f}")
-            c4.metric("Max", f"{s_df['value'].max():.2f}")
-
-            # ---- Traffic Load Analysis ----
-            if "traffic_load_proxy" in s_df.columns and s_df["traffic_load_proxy"].notna().any():
-                st.markdown("---")
-                st.subheader("Traffic Load Analysis")
-
-                correlation = s_df[["value", "traffic_load_proxy"]].corr().iloc[0, 1]
-
-                tcol1, tcol2 = st.columns(2)
-
-                with tcol1:
-                    fig_traffic = go.Figure()
-                    fig_traffic.add_trace(
-                        go.Scatter(
-                            x=s_df["timestamp"],
-                            y=s_df["traffic_load_proxy"],
-                            mode="lines",
-                            name="Traffic Load",
-                            line=dict(color=CHART_COLORS["traffic"], width=2),
-                        )
-                    )
-                    fig_traffic.update_layout(
-                        title="Traffic Load Proxy Over Time",
-                        xaxis_title="Time",
-                        yaxis_title="Traffic Load (0–1)",
-                        height=350,
-                        template="plotly_dark",
-                        paper_bgcolor=CLR_DARK_BLUE,
-                        plot_bgcolor="#081040",
-                        font=dict(family="Montserrat", color=CLR_TEXT),
-                        xaxis=dict(gridcolor="#1A3080"),
-                        yaxis=dict(gridcolor="#1A3080"),
-                        uirevision=f"traffic_{selected_sensor}",
-                    )
-                    st.plotly_chart(fig_traffic, key=f"traffic_load_{selected_sensor}", width='stretch')
-
-                with tcol2:
-                    color_col = "anomaly" if "anomaly" in s_df.columns else None
-                    fig_scatter = px.scatter(
-                        s_df,
-                        x="traffic_load_proxy",
-                        y="value",
-                        color=color_col,
-                        title=f"Sensor vs Traffic Load (r = {correlation:.3f})",
-                        labels={
-                            "traffic_load_proxy": "Traffic Load",
-                            "value": f"Value ({unit})",
-                        },
-                        color_discrete_map={
-                            0: CHART_COLORS["primary"],
-                            1: CHART_COLORS["anomaly"],
-                        },
-                        template="plotly_dark",
-                    )
-                    fig_scatter.update_layout(
-                        height=350,
-                        paper_bgcolor=CLR_DARK_BLUE,
-                        plot_bgcolor="#081040",
-                        font=dict(family="Montserrat", color=CLR_TEXT),
-                        xaxis=dict(gridcolor="#1A3080"),
-                        yaxis=dict(gridcolor="#1A3080"),
-                        uirevision=f"scatter_{selected_sensor}",
-                    )
-                    st.plotly_chart(fig_scatter, key=f"traffic_scatter_{selected_sensor}", width='stretch')
-
-                st.metric("Pearson Correlation with Traffic Load", f"{correlation:.3f}")
-
-    # ==================== TAB 4: CORRELATION ====================
-    with tab4:
-        st.subheader("Cross-Sensor Correlation Analysis")
-
-        pivot = filtered_df.pivot_table(
-            index="timestamp",
-            columns="sensor_id",
-            values="value",
-            aggfunc="first",
-        ).ffill().bfill()
-
-        if not pivot.empty and len(pivot.columns) > 1:
-            corr = pivot.corr()
-
-            fig_heat = go.Figure(
-                data=go.Heatmap(
-                    z=corr.values,
-                    x=corr.columns.tolist(),
-                    y=corr.index.tolist(),
-                    colorscale=[
-                        [0, CLR_ORANGE],
-                        [0.5, CLR_DARK_BLUE],
-                        [1, CLR_BLUE],
-                    ],
-                    zmid=0,
-                    text=np.round(corr.values, 2),
-                    texttemplate="%{text}",
-                    textfont={"size": 10, "family": "Montserrat", "color": CLR_LIGHT_BLUE},
-                    colorbar=dict(
-                        title="r", tickfont=dict(family="Montserrat", color=CLR_TEXT)
-                    ),
+                fig_traffic.update_layout(
+                    title="Traffic Load Proxy Over Time",
+                    xaxis_title="Time",
+                    yaxis_title="Traffic Load (0–1)",
+                    height=350,
+                    template="plotly_dark",
+                    paper_bgcolor=CLR_DARK_BLUE,
+                    plot_bgcolor="#081040",
+                    font=dict(family="Montserrat", color=CLR_TEXT),
+                    xaxis=dict(gridcolor="#1A3080"),
+                    yaxis=dict(gridcolor="#1A3080"),
+                    uirevision=f"traffic_{selected_sensor}",
                 )
+                st.plotly_chart(
+                    fig_traffic, key=f"traffic_load_{selected_sensor}", width='stretch'
+                )
+
+            with tcol2:
+                color_col = "anomaly" if "anomaly" in s_df.columns else None
+                fig_scatter = px.scatter(
+                    s_df,
+                    x="traffic_load_proxy",
+                    y="value",
+                    color=color_col,
+                    title=f"Sensor vs Traffic Load (r = {correlation:.3f})",
+                    labels={
+                        "traffic_load_proxy": "Traffic Load",
+                        "value": f"Value ({unit})",
+                    },
+                    color_discrete_map={
+                        0: CHART_COLORS["primary"],
+                        1: CHART_COLORS["anomaly"],
+                    },
+                    template="plotly_dark",
+                )
+                fig_scatter.update_layout(
+                    height=350,
+                    paper_bgcolor=CLR_DARK_BLUE,
+                    plot_bgcolor="#081040",
+                    font=dict(family="Montserrat", color=CLR_TEXT),
+                    xaxis=dict(gridcolor="#1A3080"),
+                    yaxis=dict(gridcolor="#1A3080"),
+                    uirevision=f"scatter_{selected_sensor}",
+                )
+                st.plotly_chart(
+                    fig_scatter, key=f"traffic_scatter_{selected_sensor}", width='stretch'
+                )
+
+            st.metric("Pearson Correlation with Traffic Load", f"{correlation:.3f}")
+
+# ==================== TAB 4: CORRELATION ====================
+# Static — only re-renders on full page rerun (sidebar changes).
+with tab4:
+    st.subheader("Cross-Sensor Correlation Analysis")
+
+    pivot = filtered_df.pivot_table(
+        index="timestamp",
+        columns="sensor_id",
+        values="value",
+        aggfunc="first",
+    ).ffill().bfill()
+
+    if not pivot.empty and len(pivot.columns) > 1:
+        corr = pivot.corr()
+
+        fig_heat = go.Figure(
+            data=go.Heatmap(
+                z=corr.values,
+                x=corr.columns.tolist(),
+                y=corr.index.tolist(),
+                colorscale=[
+                    [0, CLR_ORANGE],
+                    [0.5, CLR_DARK_BLUE],
+                    [1, CLR_BLUE],
+                ],
+                zmid=0,
+                text=np.round(corr.values, 2),
+                texttemplate="%{text}",
+                textfont={"size": 10, "family": "Montserrat", "color": CLR_LIGHT_BLUE},
+                colorbar=dict(
+                    title="r", tickfont=dict(family="Montserrat", color=CLR_TEXT)
+                ),
             )
-            fig_heat.update_layout(
-                title="Sensor Correlation Matrix",
-                height=500,
-                template="plotly_dark",
-                paper_bgcolor=CLR_DARK_BLUE,
-                plot_bgcolor="#081040",
-                font=dict(family="Montserrat", color=CLR_TEXT),
-                uirevision="corr_heatmap",
-            )
-            st.plotly_chart(fig_heat, key="corr_heatmap", width='stretch')
+        )
+        fig_heat.update_layout(
+            title="Sensor Correlation Matrix",
+            height=500,
+            template="plotly_dark",
+            paper_bgcolor=CLR_DARK_BLUE,
+            plot_bgcolor="#081040",
+            font=dict(family="Montserrat", color=CLR_TEXT),
+            uirevision="corr_heatmap",
+        )
+        st.plotly_chart(fig_heat, key="corr_heatmap", width='stretch')
 
-            st.subheader("Strongest Correlations")
-            mask = np.triu(np.ones_like(corr, dtype=bool), k=1)
-            pairs = corr.where(mask).stack().sort_values(key=abs, ascending=False)
-            for (s1, s2), r in pairs.head(10).items():
-                st.markdown(f"- **{s1}** ↔ **{s2}**: {r:.3f}")
-        else:
-            st.warning("Not enough sensors for correlation analysis.")
-
-
-render_dashboard()
+        st.subheader("Strongest Correlations")
+        mask = np.triu(np.ones_like(corr, dtype=bool), k=1)
+        pairs = corr.where(mask).stack().sort_values(key=abs, ascending=False)
+        for (s1, s2), r in pairs.head(10).items():
+            st.markdown(f"- **{s1}** ↔ **{s2}**: {r:.3f}")
+    else:
+        st.warning("Not enough sensors for correlation analysis.")

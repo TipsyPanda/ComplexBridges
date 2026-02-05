@@ -154,5 +154,11 @@ CUSTOM_CSS = f"""
     hr {{
         border-color: #1A3080 !important;
     }}
+
+    /* ---- Anti-flicker for Plotly charts during fragment reruns ---- */
+    .stPlotlyChart {{
+        contain: layout style;
+        min-height: 350px;
+    }}
 </style>
 """
