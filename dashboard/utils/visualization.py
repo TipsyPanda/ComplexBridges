@@ -11,7 +11,7 @@ _DARK_LAYOUT = dict(
     template="plotly_dark",
     paper_bgcolor="#0A1853",
     plot_bgcolor="#081040",
-    font=dict(family="Montserrat", color="rgba(202, 224, 245, 0.5)"),
+    font=dict(family="Montserrat", color="#FFFFFF"),
 )
 
 
@@ -57,8 +57,22 @@ def sensor_timeseries(
             line_color="#CAE0F5",
             annotation_text="Threshold",
             annotation_position="right",
-            annotation_font=dict(family="Montserrat", color="rgba(202, 224, 245, 0.5)"),
+            annotation_font=dict(family="Montserrat", color="#FFFFFF"),
         )
+
+        # Highlight line segments above the threshold in orange
+        above_vals = df["value"].where(df["value"] > threshold)
+        if above_vals.notna().any():
+            fig.add_trace(
+                go.Scatter(
+                    x=df["timestamp"],
+                    y=above_vals,
+                    mode="lines",
+                    name="Above threshold",
+                    line=dict(color="#E96547", width=2),
+                    connectgaps=False,
+                )
+            )
 
     if show_anomalies and "anomaly" in df.columns:
         a_df = df[df["anomaly"] == 1]

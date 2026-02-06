@@ -181,10 +181,6 @@ if use_custom_thresholds:
         format="%.0f",
     )
 
-# ---------------- Data Export ----------------
-st.sidebar.markdown("---")
-st.sidebar.subheader("Data Export")
-
 # ---------------- Filter data ----------------
 filtered_df = df[
     (df["bridge_id"] == selected_bridge)
@@ -211,16 +207,6 @@ if st.session_state.get("_last_filter_key") != filter_key:
     st.session_state.current_index = 0
     st.session_state.is_playing = False
     st.session_state._last_filter_key = filter_key
-
-# Export button (placed here so filtered_df is available)
-csv_bytes = filtered_df.to_csv(index=False).encode("utf-8")
-st.sidebar.download_button(
-    label="📥 Download Filtered CSV",
-    data=csv_bytes,
-    file_name=f"bridge_{selected_bridge}_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.csv",
-    mime="text/csv",
-    help="Download currently filtered data as CSV",
-)
 
 # ---------------- Helper ----------------
 def compute_health_score(data: pd.DataFrame) -> tuple:
@@ -450,6 +436,14 @@ with tab2:
 
             if not recent.empty:
                 st.dataframe(recent[show_cols], key="alerts_table", width='stretch')
+                csv_anomalies = recent[show_cols].to_csv(index=False).encode("utf-8")
+                st.download_button(
+                    label="📥 Download Filtered Anomalies CSV",
+                    data=csv_anomalies,
+                    file_name=f"anomalies_{selected_bridge}_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                    mime="text/csv",
+                    key="download_anomalies",
+                )
             else:
                 st.info("No anomalies match the current filters.")
         else:
